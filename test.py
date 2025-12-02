@@ -1,6 +1,3 @@
-
-
-# test_mario_standup_backrest_timercontrol.py
 import sys
 from PyQt5 import QtWidgets, QtGui, QtCore, QtMultimedia
 from pynput import keyboard as pynput_keyboard
