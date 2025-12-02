@@ -152,7 +152,7 @@ class OverlayWindow(QtWidgets.QWidget):
     @QtCore.pyqtSlot()
     def start_or_restart_standup_timer(self):
         self.reminder_timer.stop()
-        self.reminder_timer.start(5_000)
+        self.reminder_timer.start(30_000)
         self.standup_reminder = False
         self.update()
 
