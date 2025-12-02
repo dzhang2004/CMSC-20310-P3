@@ -76,6 +76,18 @@ class OverlayWindow(QtWidgets.QWidget):
         self.jump_sound = QtMultimedia.QSoundEffect()
         self.jump_sound.setSource(QtCore.QUrl.fromLocalFile(str(Path("jump_sound.wav"))))
         self.jump_sound.setVolume(0.2)
+        
+        # Alert sound for long sitting
+        self.alert_sound = QtMultimedia.QSoundEffect()
+        alert_path = Path("alert_sound.wav")
+        if alert_path.exists():
+            self.alert_sound.setSource(QtCore.QUrl.fromLocalFile(str(alert_path)))
+            self.alert_sound.setVolume(0.7)
+
+        # Flash state
+        self.flash_on = False
+        self.flash_timer = QtCore.QTimer()
+        self.flash_timer.timeout.connect(self.toggle_flash)
 
         # Keyboard listener
         self.listener = pynput_keyboard.Listener(
@@ -95,6 +107,10 @@ class OverlayWindow(QtWidgets.QWidget):
 
         self._last_size = (self.width(), self.height())
 
+    def toggle_flash(self):
+        self.flash_on = not self.flash_on
+        self.update()
+
     # ---------- keyboard ----------
     def on_press(self, key):
         if key == pynput_keyboard.Key.down and not self.down_pressed:
@@ -106,6 +122,9 @@ class OverlayWindow(QtWidgets.QWidget):
 
         if key == pynput_keyboard.Key.up:
             self.up_pressed = True
+            # STOP FLASHING WHEN BACK TOUCHES CHAIR
+            self.flash_timer.stop()
+            self.flash_on = False
 
     def on_release(self, key):
         if key == pynput_keyboard.Key.down:
@@ -151,7 +170,10 @@ class OverlayWindow(QtWidgets.QWidget):
     # ---------- reminders ----------
     def trigger_standup_reminder(self):
         self.standup_reminder = True
+        self.alert_sound.play()    
+        self.flash_timer.start(120)
         self.update()
+
 
     # ---------- drawing ----------
     def paintEvent(self, event):
@@ -165,6 +187,9 @@ class OverlayWindow(QtWidgets.QWidget):
         painter.setPen(QtGui.QColor(255, 0, 0))
         font = QtGui.QFont("Arial", 16, QtGui.QFont.Bold)
         painter.setFont(font)
+        
+        if self.flash_on:
+            painter.fillRect(self.rect(), QtGui.QColor(255, 0, 0, 180))
 
         # Stand-up reminder
         if self.standup_reminder:
