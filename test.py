@@ -6,7 +6,7 @@ from pathlib import Path
 
 # ---------- Mario sprite / physics ----------
 class MarioSprite:
-    def __init__(self, window, gif_path="mario_walking.gif", jump_path="mario_jump.png", target_size=(32, 32)):
+    def __init__(self, window, target_size=(32, 32)):
         self.window = window
         self.x = 0
         self.ground_y = 0
@@ -16,7 +16,7 @@ class MarioSprite:
         self.target_w, self.target_h = target_size
 
         # Load walking GIF
-        self.movie = QtGui.QMovie(gif_path)
+        self.movie = QtGui.QMovie("mario_walking.gif")
         if self.movie.isValid():
             self.movie.setScaledSize(QtCore.QSize(*target_size))
             self.movie.start()
@@ -30,7 +30,7 @@ class MarioSprite:
             self.jump_pixmap = fallback
 
         # Load jump image
-        jump_img = QtGui.QPixmap(jump_path)
+        jump_img = QtGui.QPixmap("mario_jump.png")
         if jump_img.isNull():
             fallback = QtGui.QPixmap(*target_size)
             fallback.fill(QtGui.QColor(0, 200, 0))
@@ -155,7 +155,7 @@ class OverlayWindow(QtWidgets.QWidget):
     @QtCore.pyqtSlot()
     def _start_or_restart_standup_timer(self):
         self.reminder_timer.stop()
-        self.reminder_timer.start(30_000)
+        self.reminder_timer.start(5_000)
         self.show_standup_reminder = False
         self.update()
 
