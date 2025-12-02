@@ -1,8 +1,8 @@
-# test_mario_standup_backrest_timercontrol_clean.py
 import sys
+from pathlib import Path
 from PyQt5 import QtWidgets, QtGui, QtCore, QtMultimedia
 from pynput import keyboard as pynput_keyboard
-from pathlib import Path
+
 
 # ---------- Mario sprite / physics ----------
 class Mario:
@@ -52,6 +52,7 @@ class Mario:
     def current_frame(self):
         return self.jump_pixmap if self.jumping else self.movie.currentPixmap()
 
+
 # ---------- Overlay window ----------
 class OverlayWindow(QtWidgets.QWidget):
     def __init__(self, width=300, height=200, pos_x=50, pos_y=50):
@@ -67,15 +68,44 @@ class OverlayWindow(QtWidgets.QWidget):
         self.down_pressed = False
         self.down_was_pressed = False
         self.up_pressed = False
+        self.left_pressed = False   # track whether LEFT is currently held
 
         # Reminder state
         self.standup_reminder = False
         self.backrest_reminder = False
 
+        # Flashing state
+        self.flashing = False
+        self.flash_on = False
+
+        base_dir = Path(__file__).resolve().parent
+
         # Load jump sound
         self.jump_sound = QtMultimedia.QSoundEffect()
-        self.jump_sound.setSource(QtCore.QUrl.fromLocalFile(str(Path("jump_sound.wav"))))
+        self.jump_sound.setSource(
+            QtCore.QUrl.fromLocalFile(str(base_dir / "jump_sound.wav"))
+        )
         self.jump_sound.setVolume(0.2)
+
+        # Nuclear sound – plays after LEFT has been held for > 5s
+        self.nuclear_sound = QtMultimedia.QSoundEffect()
+        self.nuclear_sound.setSource(
+            QtCore.QUrl.fromLocalFile(
+                str(base_dir / "nuclear-alarm-siren-sound-effect-nuke.wav")
+            )
+        )
+        self.nuclear_sound.setVolume(1.0)  # loud for testing
+
+        # Timer for "LEFT held" duration (single-shot: fires once after 5s)
+        self.left_hold_timer = QtCore.QTimer()
+        self.left_hold_timer.setSingleShot(True)
+        self.left_hold_timer.timeout.connect(self.on_left_hold_timeout)
+
+        # Timer to drive the flashing background
+        self.flash_timer = QtCore.QTimer()
+        self.flash_timer.timeout.connect(self.update_flash)
+
+        # Keyboard listener (global, via pynput)
         
         # Alert sound for long sitting
         self.alert_sound = QtMultimedia.QSoundEffect()
@@ -92,7 +122,7 @@ class OverlayWindow(QtWidgets.QWidget):
         # Keyboard listener
         self.listener = pynput_keyboard.Listener(
             on_press=self.on_press,
-            on_release=self.on_release
+            on_release=self.on_release,
         )
         self.listener.start()
 
@@ -112,37 +142,75 @@ class OverlayWindow(QtWidgets.QWidget):
         self.update()
 
     # ---------- keyboard ----------
+    # ---------- keyboard (pynput callbacks) ----------
     def on_press(self, key):
+        # Sit timer (DOWN)
         if key == pynput_keyboard.Key.down and not self.down_pressed:
             QtCore.QMetaObject.invokeMethod(
-                self, "start_or_restart_standup_timer",
-                QtCore.Qt.QueuedConnection
+                self,
+                "start_or_restart_standup_timer",
+                QtCore.Qt.QueuedConnection,
             )
             self.down_pressed = True
 
+        # Backrest (UP)
         if key == pynput_keyboard.Key.up:
             self.up_pressed = True
             # STOP FLASHING WHEN BACK TOUCHES CHAIR
             self.flash_timer.stop()
             self.flash_on = False
 
+        # LEFT pressed – start 5s hold timer the *first* time it goes down
+        if key == pynput_keyboard.Key.left and not self.left_pressed:
+            self.left_pressed = True
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "start_left_hold_timer",
+                QtCore.Qt.QueuedConnection,
+            )
+
+        # DEBUG: instant nuclear sound + flash with RIGHT arrow
+        if key == pynput_keyboard.Key.right:
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "debug_play_nuke",
+                QtCore.Qt.QueuedConnection,
+            )
+
     def on_release(self, key):
+        # Stand-up timer control (DOWN released)
         if key == pynput_keyboard.Key.down:
             self.down_pressed = False
             self.standup_reminder = False
             QtCore.QMetaObject.invokeMethod(
-                self, "stop_standup_timer",
-                QtCore.Qt.QueuedConnection
+                self,
+                "stop_standup_timer",
+                QtCore.Qt.QueuedConnection,
             )
 
+        # Backrest (UP released)
         if key == pynput_keyboard.Key.up:
             self.up_pressed = False
 
-    # ---------- Timer control ----------
+        # LEFT released – cancel hold timer AND stop sound + flashing
+        if key == pynput_keyboard.Key.left:
+            self.left_pressed = False
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "stop_left_hold_timer",
+                QtCore.Qt.QueuedConnection,
+            )
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "stop_nuke_sequence",
+                QtCore.Qt.QueuedConnection,
+            )
+
+    # ---------- Sit / stand timer control ----------
     @QtCore.pyqtSlot()
     def start_or_restart_standup_timer(self):
         self.reminder_timer.stop()
-        self.reminder_timer.start(10_000)
+        self.reminder_timer.start(10_000)  # 10 seconds
         self.standup_reminder = False
         self.update()
 
@@ -151,6 +219,83 @@ class OverlayWindow(QtWidgets.QWidget):
         self.reminder_timer.stop()
         self.standup_reminder = False
         self.update()
+
+    # ---------- nuclear "LEFT held" logic ----------
+    @QtCore.pyqtSlot()
+    def start_left_hold_timer(self):
+        """
+        Called once when LEFT arrow is first pressed.
+        Start a 5s single-shot timer. The user does NOT need to release.
+        """
+        self.left_hold_timer.stop()
+        self.left_hold_timer.start(5_000)  # 5 seconds
+
+    @QtCore.pyqtSlot()
+    def stop_left_hold_timer(self):
+        self.left_hold_timer.stop()
+
+    @QtCore.pyqtSlot()
+    def on_left_hold_timeout(self):
+        """
+        When the 5s timer fires, only start the nuke sequence
+        if LEFT is still being held.
+        """
+        if self.left_pressed:
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "start_nuke_sequence",
+                QtCore.Qt.QueuedConnection,
+            )
+
+    @QtCore.pyqtSlot()
+    def start_nuke_sequence(self):
+        """
+        Start nuclear sound and begin flashing background.
+        """
+        self.nuclear_sound.stop()
+        self.nuclear_sound.play()
+        self.start_flashing()
+
+    @QtCore.pyqtSlot()
+    def stop_nuke_sequence(self):
+        """
+        Stop nuclear sound and stop flashing.
+        Called when LEFT is released.
+        """
+        self.nuclear_sound.stop()
+        self.stop_flashing()
+
+    # ---------- flashing logic ----------
+    @QtCore.pyqtSlot()
+    def start_flashing(self):
+        if not self.flashing:
+            self.flashing = True
+            self.flash_on = False
+            self.flash_timer.start(150)  # flash every 150 ms
+
+    @QtCore.pyqtSlot()
+    def stop_flashing(self):
+        self.flashing = False
+        self.flash_timer.stop()
+        self.flash_on = False
+        self.update()
+
+    @QtCore.pyqtSlot()
+    def update_flash(self):
+        """
+        Toggle green flash state and repaint.
+        """
+        if self.flashing:
+            self.flash_on = not self.flash_on
+            self.update()
+
+    @QtCore.pyqtSlot()
+    def debug_play_nuke(self):
+        """
+        Debug shortcut to test sound + flash instantly with RIGHT arrow.
+        """
+        print("DEBUG: playing nuclear sound + flash")
+        self.start_nuke_sequence()
 
     # ---------- game loop ----------
     def game_loop(self):
@@ -179,10 +324,18 @@ class OverlayWindow(QtWidgets.QWidget):
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
 
+        # Flashing green background
+        if self.flashing and self.flash_on:
+            painter.fillRect(self.rect(), QtGui.QColor(0, 255, 0))
+
         # Draw Mario
-        painter.drawPixmap(self.mario.x, self.mario.y,
-                           self.mario.sprite_w, self.mario.sprite_h,
-                           self.mario.current_frame())
+        painter.drawPixmap(
+            self.mario.x,
+            self.mario.y,
+            self.mario.sprite_w,
+            self.mario.sprite_h,
+            self.mario.current_frame(),
+        )
 
         painter.setPen(QtGui.QColor(255, 0, 0))
         font = QtGui.QFont("Arial", 16, QtGui.QFont.Bold)
@@ -213,7 +366,11 @@ class OverlayWindow(QtWidgets.QWidget):
 
     def closeEvent(self, event):
         self.listener.stop()
+        self.left_hold_timer.stop()
+        self.flash_timer.stop()
+        self.reminder_timer.stop()
         event.accept()
+
 
 # ---------- Run ----------
 if __name__ == "__main__":
