@@ -1,8 +1,9 @@
-# test_mario_standup_backrest_timercontrol_clean.py
 import sys
 from PyQt5 import QtWidgets, QtGui, QtCore, QtMultimedia
 from pynput import keyboard as pynput_keyboard
 from pathlib import Path
+import random
+
 
 # ---------- Mario sprite / physics ----------
 class Mario:
@@ -74,8 +75,22 @@ class OverlayWindow(QtWidgets.QWidget):
 
         # Load jump sound
         self.jump_sound = QtMultimedia.QSoundEffect()
-        self.jump_sound.setSource(QtCore.QUrl.fromLocalFile(str(Path("jump_sound.wav"))))
-        self.jump_sound.setVolume(0.2)
+        jump_path = Path("jump_sound.wav")
+        if jump_path.exists():
+            self.jump_sound.setSource(QtCore.QUrl.fromLocalFile(str(jump_path)))
+            self.jump_sound.setVolume(0.2)
+            
+        # Alert sound for long sitting
+        self.alert_sound = QtMultimedia.QSoundEffect()
+        alert_path = Path("alert_sound.wav")
+        if alert_path.exists():
+            self.alert_sound.setSource(QtCore.QUrl.fromLocalFile(str(alert_path)))
+            self.alert_sound.setVolume(0.7)
+
+        # Flash state
+        self.flash_on = False
+        self.flash_timer = QtCore.QTimer()
+        self.flash_timer.timeout.connect(self.toggle_flash)
 
         # Keyboard listener
         self.listener = pynput_keyboard.Listener(
@@ -94,23 +109,31 @@ class OverlayWindow(QtWidgets.QWidget):
         self.reminder_timer.timeout.connect(self.trigger_standup_reminder)
 
         self._last_size = (self.width(), self.height())
+    
+    def toggle_flash(self):
+        self.flash_on = not self.flash_on
+        self.update()
 
     # ---------- keyboard ----------
     def on_press(self, key):
-        if key == pynput_keyboard.Key.down and not self.down_pressed:
-            QtCore.QMetaObject.invokeMethod(
-                self, "start_or_restart_standup_timer",
-                QtCore.Qt.QueuedConnection
-            )
+        if key == pynput_keyboard.Key.down:
+            if not self.down_pressed:
+                QtCore.QMetaObject.invokeMethod(
+                    self, "_start_or_restart_standup_timer",
+                    QtCore.Qt.QueuedConnection
+                )
             self.down_pressed = True
 
         if key == pynput_keyboard.Key.up:
             self.up_pressed = True
+            # STOP FLASHING WHEN BACK TOUCHES CHAIR
+            self.flash_timer.stop()
+            self.flash_on = False
 
     def on_release(self, key):
         if key == pynput_keyboard.Key.down:
             self.down_pressed = False
-            self.standup_reminder = False
+            self.show_standup_reminder = False
             QtCore.QMetaObject.invokeMethod(
                 self, "stop_standup_timer",
                 QtCore.Qt.QueuedConnection
@@ -150,12 +173,18 @@ class OverlayWindow(QtWidgets.QWidget):
 
     # ---------- reminders ----------
     def trigger_standup_reminder(self):
-        self.standup_reminder = True
+        self.show_standup_reminder = True
+        self.alert_sound.play()
+        # MORE URGENT FLASHING + NEVER STOPS
+        self.flash_timer.start(120)
         self.update()
 
     # ---------- drawing ----------
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
+        
+        if self.flash_on:
+            painter.fillRect(self.rect(), QtGui.QColor(255, 0, 0, 180))
 
         # Draw Mario
         painter.drawPixmap(self.mario.x, self.mario.y,
@@ -178,7 +207,6 @@ class OverlayWindow(QtWidgets.QWidget):
             w = painter.fontMetrics().horizontalAdvance(text)
             painter.drawText((self.width() - w) // 2, 60, text)
 
-        # Border
         pen = QtGui.QPen(QtGui.QColor(255, 255, 255))
         pen.setWidth(2)
         painter.setPen(pen)
@@ -190,8 +218,10 @@ class OverlayWindow(QtWidgets.QWidget):
         self.listener.stop()
         event.accept()
 
+
 # ---------- Run ----------
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     window = OverlayWindow(width=300, height=200, pos_x=50, pos_y=50)
     sys.exit(app.exec_())
+
